@@ -23,12 +23,13 @@ Các file runtime và secret không được track:
 
 ## Stack hiện tại
 
-`docker compose` sẽ chạy 5 service:
+`docker compose` sẽ chạy 6 service:
 
 - `postgres`
 - `redis`
 - `kafka`
 - `openclaw-gateway`
+- `cloudflared`
 - `en-practice-be`
 
 ## Setup nhanh
@@ -65,6 +66,8 @@ Giá trị nên dùng khi chạy local:
 
 ```dotenv
 APP_PORT=8080
+CLOUDFLARED_CONFIG_DIR=/home/<user>/.cloudflared
+
 REDIS_HOST=redis
 REDIS_PORT=6379
 REDIS_SSL_ENABLED=false
@@ -82,6 +85,7 @@ OPENCLAW_IMAGE=ghcr.io/openclaw/openclaw:latest
 ```
 
 Nếu chạy trên server public, đổi `KAFKA_EXTERNAL_HOST` sang domain hoặc IP thật của máy.
+`CLOUDFLARED_CONFIG_DIR` phải trỏ đến thư mục host chứa `config.yml` và credentials file của Cloudflare tunnel.
 
 ### 3. Tạo file cấu hình OpenClaw thật
 
@@ -109,12 +113,13 @@ Kiểm tra trạng thái:
 docker compose ps
 ```
 
-5 service cần lên:
+6 service cần lên:
 
 - `postgres`
 - `redis`
 - `kafka`
 - `openclaw-gateway`
+- `cloudflared`
 - `en-practice-be`
 
 ### 5. Xem log nếu service chưa healthy
@@ -124,6 +129,7 @@ docker compose logs --tail 100 postgres
 docker compose logs --tail 100 redis
 docker compose logs --tail 100 kafka
 docker compose logs --tail 100 openclaw-gateway
+docker compose logs --tail 100 cloudflared
 docker compose logs --tail 100 en-practice-be
 ```
 
@@ -188,4 +194,5 @@ docker compose down -v
 - `postgres` lưu data vào `data/postgres`
 - log backend được mount tại `logs/app`
 - OpenClaw config thật nằm ở `openclaw/config/openclaw.json` và không được commit
-- `cloudflared` hiện không nằm trong compose; nếu cần tunnel thì cấu hình đang ở `C:\Users\sonpt1\.cloudflared\config.yml`
+- `cloudflared` chạy trong compose và đọc `config.yml` từ thư mục được trỏ bởi `CLOUDFLARED_CONFIG_DIR`
+- thư mục `CLOUDFLARED_CONFIG_DIR` nên là dạng `~/<user>/.cloudflared` trên host Linux và vẫn giữ toàn bộ tunnel credentials ngoài repo
