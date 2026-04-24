@@ -1,0 +1,246 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: en_practice_postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      TZ: Asia/Bangkok
+      PGTZ: Asia/Bangkok
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    command: >
+      postgres
+      -c max_connections=40
+      -c shared_buffers=128MB
+      -c effective_cache_size=384MB
+      -c maintenance_work_mem=64MB
+      -c work_mem=2MB
+      -c wal_buffers=8MB
+      -c max_wal_size=512MB
+      -c min_wal_size=128MB
+      -c checkpoint_completion_target=0.9
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=100
+      -c wal_compression=on
+      -c log_min_duration_statement=1000
+      -c logging_collector=off
+      -c log_destination=stderr
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB} || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - en-practice
+    mem_limit: 512m
+    mem_reservation: 256m
+    cpus: 0.50
+
+  en-practice-be:
+    image: ${DOCKER_HUB_IMAGE}:${APP_VERSION:-latest}
+    container_name: en_practice_be
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      openclaw-gateway:
+        condition: service_healthy
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    environment:
+      TZ: Asia/Bangkok
+
+      # Spring profile
+      SPRING_PROFILES_ACTIVE: prod
+
+      # Database
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
+
+      # HikariCP - giảm áp lực RAM
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: 5
+      SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE: 1
+      SPRING_DATASOURCE_HIKARI_CONNECTION_TIMEOUT: 30000
+      SPRING_DATASOURCE_HIKARI_IDLE_TIMEOUT: 600000
+      SPRING_DATASOURCE_HIKARI_MAX_LIFETIME: 1800000
+      SPRING_DATASOURCE_HIKARI_KEEPALIVE_TIME: 300000
+
+      # JVM - khóa chặt memory để tránh bị OOM kill
+      JAVA_TOOL_OPTIONS: >-
+        -Xms128m
+        -Xmx384m
+        -XX:MaxDirectMemorySize=64m
+        -XX:ReservedCodeCacheSize=64m
+        -XX:+UseContainerSupport
+        -XX:+ExitOnOutOfMemoryError
+        -XX:+HeapDumpOnOutOfMemoryError
+        -XX:HeapDumpPath=/app/logs
+        -Djava.security.egd=file:/dev/./urandom
+
+      # Actuator / graceful shutdown
+      SERVER_SHUTDOWN: graceful
+      SPRING_LIFECYCLE_TIMEOUT_PER_SHUTDOWN_PHASE: 20s
+
+      # JWT
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRATION: ${JWT_EXPIRATION:-604800000}
+
+      # Firebase
+      FIREBASE_CONFIG_BASE64: ${FIREBASE_CONFIG_BASE64}
+
+      # OpenClaw gateway
+      OPENCLAW_GATEWAY_URL: ${OPENCLAW_GATEWAY_URL}
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
+      OPENCLAW_GATEWAY_RESPONSE_TIMEOUT_MS: ${OPENCLAW_GATEWAY_RESPONSE_TIMEOUT_MS}
+      OPENCLAW_GATEWAY_READ_TIMEOUT_MS: ${OPENCLAW_GATEWAY_READ_TIMEOUT_MS}
+      OPENCLAW_GATEWAY_WRITE_TIMEOUT_MS: ${OPENCLAW_GATEWAY_WRITE_TIMEOUT_MS}
+
+      # TTS
+      TTS_API_KEY: ${TTS_API_KEY}
+      TTS_VOICE_NAME: ${TTS_VOICE_NAME:-en-US-Neural2-J}
+      TTS_LANGUAGE_CODE: ${TTS_LANGUAGE_CODE:-en-US}
+
+      # STT
+      STT_GOOGLE_CREDENTIALS_BASE64: ${FIREBASE_CONFIG_BASE64}
+
+      # Backblaze S3
+      BACKBLAZE_S3_ENDPOINT: ${BACKBLAZE_S3_ENDPOINT}
+      BACKBLAZE_S3_REGION: ${BACKBLAZE_S3_REGION}
+      BACKBLAZE_S3_ACCESS_KEY_ID: ${BACKBLAZE_S3_ACCESS_KEY_ID}
+      BACKBLAZE_S3_SECRET_ACCESS_KEY: ${BACKBLAZE_S3_SECRET_ACCESS_KEY}
+      BACKBLAZE_S3_BUCKET_NAME: ${BACKBLAZE_S3_BUCKET_NAME}
+      BACKBLAZE_S3_WORKER_SHARED_SECRET: ${BACKBLAZE_S3_WORKER_SHARED_SECRET}
+
+      # CORS
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS}
+
+      # Redis
+      REDIS_HOST: ${REDIS_HOST}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      REDIS_SSL_ENABLED: ${REDIS_SSL_ENABLED:-false}
+      SPRING_CACHE_TYPE: ${SPRING_CACHE_TYPE}
+
+      # Kafka
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:-kafka:9092}
+
+      # Logging
+      LOG_FILE: /app/logs/en-practice-be.log
+
+    volumes:
+      - ./logs/app:/app/logs
+    healthcheck:
+      test: ["CMD-SHELL", "wget -S -O - http://localhost:8080/actuator/health 2>&1 | grep -Eq 'HTTP/[0-9.]+ (200|401)' || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    networks:
+      - en-practice
+    mem_limit: 896m
+    mem_reservation: 512m
+    cpus: 1.00
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    stop_grace_period: 30s
+
+  redis:
+    image: redis:7-alpine
+    container_name: en_practice_redis
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --maxmemory
+      - 128mb
+      - --maxmemory-policy
+      - allkeys-lru
+      - --tcp-keepalive
+      - "60"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - en-practice
+    mem_limit: 192m
+    mem_reservation: 96m
+
+  openclaw-gateway:
+    image: ${OPENCLAW_IMAGE:-ghcr.io/openclaw/openclaw:latest}
+    container_name: openclaw_gateway
+    restart: unless-stopped
+    ports:
+      - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
+    environment:
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
+    volumes:
+      - ./openclaw/config:/home/node/.openclaw
+      - ./openclaw/workspace:/home/node/.openclaw/workspace
+    networks:
+      - en-practice
+    mem_limit: 1024m
+    mem_reservation: 512m
+
+  kafka:
+    image: apache/kafka:4.2.0
+    container_name: kafka
+    restart: unless-stopped
+    ports:
+      - "${KAFKA_INTERNAL_PORT:-9092}:9092"
+      - "${KAFKA_EXTERNAL_PORT:-9094}:9094"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: INTERNAL://:9092,EXTERNAL://:9094,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://${KAFKA_INTERNAL_HOST:-kafka}:${KAFKA_INTERNAL_PORT:-9092},EXTERNAL://${KAFKA_EXTERNAL_HOST}:${KAFKA_EXTERNAL_PORT:-9094}
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_NUM_PARTITIONS: 1
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_LOG_RETENTION_HOURS: 24
+      KAFKA_LOG_RETENTION_BYTES: 268435456
+      KAFKA_LOG_SEGMENT_BYTES: 67108864
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_HEAP_OPTS: "-Xms256m -Xmx256m"
+      KAFKA_LOG4J_ROOT_LOGLEVEL: ERROR
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "bash", "-c", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    networks:
+      - en-practice
+    mem_limit: 512m
+    mem_reservation: 256m
+
+volumes:
+  kafka_data:
+
+networks:
+  en-practice:
+    driver: bridge

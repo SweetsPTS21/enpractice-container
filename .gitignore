@@ -1,0 +1,13 @@
+.env
+
+# Runtime data
+logs/
+data/
+docs/
+dump-*.sql
+
+# OpenClaw runtime state
+openclaw/workspace/
+openclaw/config/*
+!openclaw/config/openclaw.json.example
+
